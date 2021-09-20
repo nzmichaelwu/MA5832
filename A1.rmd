@@ -1,0 +1,187 @@
+---
+title: "MA5832 - Assignment 1"
+author: "Michael Wu"
+date: "06/09/2021"
+output:
+  html_document:
+    css: style.css
+---
+
+## Question 1
+Let's consider the event of particular holiday accommodation is full as a success, then this problem 
+can be considered as a binomial distribution problem, with each of the events are independent of each other.
+Let x be a random variable defining the number of holiday accommodation facilities as full, and thus:
+x ~ Binomial(n, p), where
+    + n = sample size
+    + p = prob. of success
+
+We use the cumulative probability function for the following questions.
+
+### (a) What is the probability that at most 10 of these are full?
+The sample size n = 25, and the prob. of success = 0.4, and the vector of quantiles q = 10 (because we are after the prob. that at most 10 are full).
+```{r Question 1a}
+pbinom(10, size=25, prob=0.4)
+```
+
+### (b) What is the probability that no more than 15 of these are full?
+The sample size n = 25, and the prob. of success = 0.4, and the vector of quantiles q = 15 (because we are after the prob. that no more than 15 are full).
+```{r Question 1b}
+pbinom(15, size=25, prob=0.4)
+```
+
+### (c) What is the probability that less than one quarter of them are full?
+One quarter of the sample size 25 is 6.25, so we will be calculating the probability of less than or equal to 6 of the accommodations are full.
+```{r Question 1c}
+pbinom(6, size=25, prob=0.4)
+```
+
+
+## Question 2
+### (a) Find the eigenvalues and eigenvectors of the 3 x 3 matrix
+
+![](3x3_matrix.jpg)
+
+Solution:
+
+![Question 2a solution 1](question_2_1.jpg)
+
+![Question 2a solution 2](question_2_2.jpg)
+
+![Question 2a solution 3](question_2_3.jpg)
+
+
+### (b) Provide an application of eigenvalues and eigenvectors in Data Science or Statistics. Elaborate their usefulness in the application.
+
+One application of eigenvalues and eigenvectors in Data Science is the Principal Component Analysis. Decomposing a matrix in terms of its eigenvalues and eigenvectors allows dimension reduction and effectively represent multiple columns to less number of vectors, by finding linear combination among them. By performing dimension reduction, machine learning problems that involve lots of data can reduce the data size without losing actual representation of those values.
+
+
+## Question 3
+```{r data gathering, echo=FALSE, include=FALSE}
+library(datarium)
+library(dplyr)
+data(marketing)
+```
+
+Obtain feature variables (X) and response variable (Y)
+```{r}
+X = marketing %>% 
+  select(c('youtube', 'facebook', 'newspaper'))
+
+y = marketing %>% 
+  select(c('sales'))
+```
+
+### (a) Use equaionts (4) and (5) to estimate Beta and its standard error in R.
+```{r, warning=FALSE}
+X_transpose = t(X)
+
+B_hat = solve(X_transpose %*% as.matrix(X)) %*% X_transpose %*% as.matrix(y)
+
+marketing$predicted <- as.matrix(X) %*% B_hat
+
+s_square <- sum((marketing$sales - marketing$predicted)^2)/(nrow(marketing)-4)
+
+std_err <- diag(sqrt(s_square * solve(X_transpose %*% as.matrix(X))))
+
+B_hat
+std_err
+```
+
+### (b) Compare the results obtained in Question 3(a) with those obtained from the function lm() in R.
+
+Apply the lm() function to the dataframe.
+```{r, warning=FALSE}
+multi_fit <- lm(formula = sales ~ youtube + facebook + newspaper, data=marketing)
+summary(multi_fit)
+```
+By comparing the results obtained in Question 3(a) with those obtained from the lm() function, we determined that the Beta coefficients are different between the 2 methods. This is because the manual method in Question 3(a) assumed the intercept of the linear regression is 0, whereas the standard lm() function includes an intercept, unless specified otherwise. The standard errors between the 2 methods are more or less the same, with the different being ~0.01 for facebook and newspaper between the 2 methods.
+
+
+## Question 4
+### (a) Write down a step-by-step procedure of Classical Gradient Descent procedure to estimate Beta in equation (3)
+
+The loss function, i.e. mean squared errors (equation 3) is as follows.
+![equation 3](equation_3.jpg)
+
+Below is the step-by-step procedure for Gradient Descent:
+
+  1. Let m = random number between 0 and 1, c = 0, learning_rate (lr) = 0.000001
+  
+  2. Calculate the derivative of the loss function above. Refer to screenshot below for the partial derivative of the loss function.
+  ![question 4](question_4_a.jpg)
+  
+  3. Update current value of m and c using:
+    + m = m - L * Dm
+    + c = c - L * Dm
+  
+  4. Repeat until the loss function is minimised
+
+### (b) Write a R code to implement the Classical Gradient Descent procedure provided in Question 4(a).
+```{r}
+#Goal is to estimate m and c in the multivariate linear regression Yi = miXi + c using Gradient Descent
+m0 <- runif(ncol(X), 0 ,1)
+c0 <- 0
+
+lm_gd <- function(X, y, lr = 0.001, max_iter = 100, changes = 0.001){
+  
+  m <- matrix(0, ncol=3, nrow=max_iter) # matrix to store the parameter estimates
+  c <- matrix(0, ncol=1, nrow=max_iter) # matrix to store the intercept estimates
+  dm <- matrix(0, ncol=1, nrow=max_iter) # matrix to store the gradients dm
+  dc <- matrix(0, ncol=1, nrow=max_iter) # matrix to store the change in intercept
+
+  # Step 1:
+  m[1,] <- m0 # set the first variable
+  c[1,] <- c0 # set the first variable
+  
+  for(i in 1:(max_iter-1)){
+    yhat <- m[i,1]*X[,1] + m[i,2]*X[,2] + m[i,3]*X[,3] + c[i,1] # calculate yhats for all Xs and ms (3 of them)
+  
+    # Step 2: calculate the gradient of the loss function using the partial derivatives of the loss function
+    # w.r.t m and c
+    dm[i,1] <- -2*sum(t(X)*(y-yhat))/nrow(X)
+    dc[i,1] <- -2*(sum(y-yhat)/nrow(X))
+    
+    # Step 3: update m and c according to m = m - lr*Dm and c = c - lr*Dc
+    m[i+1,] <- m[i,] - lr * dm[i,1]
+    c[i+1,] <- c[i,] - lr * dc[i,1]
+    
+    if(i>1 & all(abs(dm)< changes)){
+      i=i-1
+      break;
+    }
+    
+  }
+  
+  # Return results
+  gd_output <- data.frame("i" = seq(1:max_iter), "m" = m, "dm" = dm, "c" = c, "dc" = dc)
+  return(gd_output)
+}
+
+```
+
+### (c) Discuss the results obtained from Question 4(b) and compare it with that obtained from Question 3(a).
+
+Obtain results using the function created in Question 4(b) first.
+```{r}
+l <- lm_gd(X, y, lr = 0.000001, max_iter = 1000)
+plot(l$dm, l$m)
+```
+
+Compute the loss.
+```{r}
+l$loss <- 0
+for(i in 1:nrow(l)){
+  sqr_error <- (y-(l$m.1[i]*X[,1]+l$m.2[i]*X[,2]+l$m.3[i]*X[,3]+l$c[i]))^2
+  l$loss[i] <- mean(sqr_error[,1])
+}
+head(l)
+tail(l)
+```
+The coefficients obtained through the Gradient descent method are different those obtained from Question 3(a). This may due to the fact that Gradient descent is an iterative algorithm, whereas the normal equation in Question 3(a) is an analytical approach. The difference in the results is also because Gradient descent uses a learning rate, whereas the normal equation does not, so a change of the learning rate will change the coefficients obtained from the Gradient descent method.
+
+## Question 5
+### Compare the optimisation algorithms of Classical Gradient Descent, Stochastic Gradient Descent and Newton's methods to see advantages and disadvantages of each algorithm.
+
+Both gradient descent (GD) and stochastic gradient descent(SGD) updates a set of parameters in an iterative manner to minimise an error function. With GD, the algorithm run through all the samples in the dataset to do a single update for a parameter in each iteration, while with SGD, the algorithm uses only one or subset of the dataset to do the update for a parameter in each iteration. Therefore, if the sample size is large, then GD may take longer computation time than SGD because in every iteration when the algorithm is updating the values of the parameters, it runs through the complete dataset. On the other hand, SGD converges faster than GD but the error function is not as well minimised compare to GD.
+
+Newton's method is different to GD and SGD, in which it is a method for finding the root of a function rather than its maxima / minima. This means that, if the problem satisfies the constraints of Newton's method, we can find x for which f(x) = 0, not f'(x) = 0 (which is the case for GD/SGD). The main difference between GD / SGD and Newton's method is the parametric nature of GD / SGD (i.e. the learning rate). Newton's method is not parametric, which means that we can apply it without worrying for hyperparameter optimisation.

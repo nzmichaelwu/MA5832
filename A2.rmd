@@ -1,0 +1,180 @@
+---
+title: "Assignment 2"
+author: "Michael Wu"
+date: "16/09/2021"
+output:
+  html_document:
+    css: style.css
+---
+
+# Part I: An analytical problem
+
+```{r, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(quadprog)
+
+X1 <- c(3, 4, 3.5, 5, 4, 6, 2, -1, 3, 3, -2, -1)
+X2 <- c(2, 0, -1, 1, -3, -2, 5, 7, 6.5, 7, 7, 10)
+Y <- c(-1, -1, -1, -1, -1, -1, 1, 1, 1, 1, 1, 1)
+
+data <- data_frame(X1, X2, Y)
+```
+
+## Question 1:
+
+```{r}
+# Plot for Red colour (Y = 1)
+ggplot(data, aes(x = X2, y = X1)) + 
+  geom_point(aes(colour = factor(Y))) +
+  theme(panel.grid.major = element_line(colour = "grey")) + 
+  scale_x_continuous(breaks = seq(-5,15,1)) + 
+  scale_y_continuous(breaks = seq(-5,15,1))
+```
+## Question 2:
+### Find the optimal separating hyperplane of the classification problem using the function solve.QP() from quadprog in R.
+```{r}
+# solve QP with quadprog package. The following code segment solves the quadratic programming problems of the form
+# min(-d^T*b + 1/2*b^T*D*b) with the constraints A^T b >= b_0.
+# quadprog solver requires that the D matrix be symmetric positive definite, and thus, we will modify matrix D by a small diagonal matrix and obtain positive definite matrix.
+
+eps <- 1e-8
+
+X <- as.matrix(cbind(X1, X2))
+Y_matrix <- as.matrix(Y)
+n <- dim(X)[1]
+
+# build the system matrices
+Q <- sapply(1:n, function(i) Y_matrix[i]*t(X)[,i]) # this is to compute Q=[y1(X^T)1|…|yn(X^T)n].
+D <- t(Q)%*%Q # this is to compute the matrix appearing in the quadratic function to be minimised.
+d <- matrix(1, nrow=n)
+b0 <- rbind(matrix(0, nrow=1, ncol=1), matrix(0, nrow=n, ncol=1))
+A <- t(rbind(matrix(Y_matrix, nrow=1, ncol=n), diag(nrow=n)))
+
+# call the QP solver
+sol <- solve.QP(D + eps*diag(n), d, A, b0, meq = 1, factorized = FALSE) # we are passing the matrix D into the first argument Dmat, hence factorized = FALSE
+qpsol <- matrix(sol$solution, nrow=n)
+qpsol
+```
+
+### Sketch the optimal separating hyperplane in the scatter plot obtained in Question 1.
+```{r}
+find_hyperplane <- function(a, y, X){
+  nonzero <- abs(a) > 1e-5
+  W <- rowSums(sapply(which(nonzero), function(i) a[i]*y[i]*X[i,]))
+  b <- mean(sapply(which(nonzero), function(i) X[i,]*W - y[i]))
+  slope <- -W[1]/W[2] # slope of a line method
+  intercept <- b/W[2]
+  
+  return(c(slope, intercept))
+}
+
+qpline <- find_hyperplane(qpsol, Y_matrix, X)
+
+# plot the results
+ggplot(data, aes(x = X2, y = X1)) + 
+  geom_point(aes(colour = factor(Y))) + 
+  geom_abline(slope = qpline[1], intercept = qpline[2], size=1) + 
+  theme(panel.grid.major = element_line(colour = "grey")) + 
+  scale_x_continuous(breaks = seq(-5,15,1)) + 
+  scale_y_continuous(breaks = seq(-5,15,1))
+
+```
+
+## Question 3:
+
+
+
+
+
+# Part II: An application
+## 2.2.1 Data
+```{r, warning=FALSE}
+# select a random sample of 70% as train
+library(caret)
+cc_data <- readxl::read_xls('CreditCard_Data.xls', col_names = TRUE, skip = 1)
+
+set.seed(1234)
+split <- createDataPartition(cc_data$`default payment next month`, p = 0.7, list = FALSE) # 70% training, 30% test
+
+train_set <- cc_data[split, ]
+test_set <- cc_data[-split, ]
+
+dim(train_set)
+```
+
+## 2.2.2 Tree Based Algorithms
+### (a) Model Selection
+For classifying credible and non-credible clients based on the dataset given, I have decided to use a Gradient Boosting algorithm with the xgboost package. This is because with a boosting algorithm, it improves the predictability of the tree-based methods by generating a large number of trees using bootstrapped samples and combine predictions of bootstrapped trees to achieve prediction stability. Boosting algorithm grows a tree sequentially and fit 'weak' classifiers to the original but modified data and combining weak classifiers to produce a strong committee. In other words, boosting algorithm learns from previous tree's mistake and improve on it in subsequent tree. I chose Gradient Boosting method over other boosting algorithms such as AdaBoost because Gradient Boosting is more robust and flexible than AdaBoost, as it can be utilised by any differentiable loss function, not just an exponential loss function in the case of AdaBoost.
+
+For this classification problem, I will be using the first 11 features (from LIMIT_BAL to PAY_6) only. This is because first of all, features that are scarced do not have much value in the predictability of the model. Secondly, those features that have not been selected are purely dollar amounts and will not add value to a decision tree type model.
+
+Lastly, we selected the following hyperparameters:
+
+  + eta = 0.1 -> learning rate not too small (so that the model takes a long time to optimise), and not too big (so that the model bounce around and never converges)
+  + max_depth = 3 -> maximum depth of a tree is 3 to avoid overfitting the model to the training set.
+  + min_child_weight = 2 -> minimum number of observations required in each terminal node to be 2.
+  
+Also, the objective parameter of the xgboost is set to "binary:hinge", so it makes predictions of 0 or 1, rather than returning probabilities.
+
+Refer to the R code below for model construction.
+```{r, warning=FALSE}
+library(xgboost)
+predictor <- c("LIMIT_BAL", "SEX", "EDUCATION", "MARRIAGE", "AGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6")
+# predictor <- c("LIMIT_BAL", "SEX", "EDUCATION", "MARRIAGE", "AGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
+#                "BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6", "PAY_AMT1", "PAY_AMT2",
+#                "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6")
+response <- c("default payment next month")
+
+x_train <- train_set[, predictor] %>% as.matrix()
+y_train <- train_set$`default payment next month`
+
+### Gradient Boosting Model
+# create params
+params <- list(
+  eta = 0.1, # learning rate
+  max_depth = 3, # tree depth
+  min_child_weight = 2 # minimum number of observations required in each terminal node
+)
+
+# train model
+xgb_model <- xgboost(
+  params = params,
+  data = x_train,
+  label = y_train,
+  nrounds = 1000,
+  objective = "binary:hinge",
+  eval_metric = "rmse",
+  verbose = 0
+)
+```
+
+### (b) Model Summary - Variable Importance
+```{r}
+# create importance matrix
+importance_matrix <- xgb.importance(model = xgb_model)
+
+importance_matrix
+
+# variable importance plot
+xgb.plot.importance(importance_matrix, measure = "Gain")
+```
+
+The table and plot above displayed the model summary in terms of which features have the higher importance to the model. Based on the importance plot, we determined that feature LIMIT_BAL (amount of the given credit) and PAY_0 (the repayment status in September 2005). Interestingly, features such as Education, Marriage, and Sex have the lowest importance to the model.
+
+### (c) Model Performance on Training Set
+```{r}
+# predict using training data
+pred_train <- predict(xgb_model, x_train)
+
+# confusion matrix
+confusionMatrix(factor(pred_train), factor(y_train))
+
+```
+
+Based on the confusion matrix on the training set, we determined that the model has a 0.825 accuracy with the training data. 15571 out of 21000 (~74.1%) of the training sample are true positive, where the actual and predicted are both 0 (non-default payment); 1753 out of 21000 (~8.35%) of the training sample are true negative, where the actual and predicted are both 1 (default payment); 2919 out of 21000 (13.9%) of the training sample are false positive, where the actual is actually 1 (default payment) but predicted as 0 (non default payment); and lastly 757 out of 21000 (~3.6%) of the training sample are false negative, where the actual is 0 (non default payment) but predicted as 1 (default payment).
+
+Furthermore, the sensitivity of the model is 0.9536, meaning that the model predicted the positive class (0) correctly ~95.36% of time, while the specificity of the model of 0.3752 indicating that the model may not be performing well when predicting the negative class (1).
+
+
+## 2.2.3 Support vector classifier
