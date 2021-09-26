@@ -1,11 +1,17 @@
 ---
 title: "Assignment 2"
 author: "Michael Wu"
-date: "16/09/2021"
+date: "26/09/2021"
 output:
   html_document:
     css: style.css
 ---
+
+```{r knitr_options, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+
+set.seed(1234)
+```
 
 # Part I: An analytical problem
 
@@ -27,7 +33,8 @@ Below is a scatter plot represent the points with Red colour for the class Y = 1
 # Plot data, where Red is for Y = 1 and Blue is for Y = -1
 ggplot(data, aes(X2, X1, col=Y)) + 
   geom_point() +
-  scale_color_manual(values = c("blue","red"))
+  scale_color_manual(values = c("blue","red")) +
+  theme(panel.grid.major = element_line(colour = "grey"))
 ```
 
 ## Question 2:
@@ -49,7 +56,7 @@ and thus to make the margin as wide as possible, we minimise the norm(w). The co
 
 - minimum of norm(w), subject to w^T * x - b >= 1: y = 1 and w^T * x - b <= -1: y = -1. 
 
-Hence, to solve this quadratic programming problem, and thus finding the optimal separating hyperplane, we used the function solve.QP() from the quadprog package in R, and sketch the optimal separting hyperplane in scatter plot. Refer to the R code below.
+Hence, to solve this quadratic programming problem, and thus finding the optimal separating hyperplane, we used the function solve.QP() from the quadprog package in R, and sketch the optimal separating hyperplane in scatter plot. Refer to the R code below.
 
 ```{r}
 # The quadprog package offers optimisation for problems with the form of:
@@ -82,7 +89,8 @@ ggplot(data, aes(X2, X1, col=Y)) +
   scale_color_manual(values = c("blue","red")) +
   geom_abline(intercept=(b+1)/w[2],slope=-w[1]/w[2],alpha=.2,linetype=2) +
   geom_abline(intercept=(b-1)/w[2],slope=-w[1]/w[2],alpha=.2,linetype=2) +
-  geom_abline(intercept=b/w[2],slope=-w[1]/w[2],linetype=3)
+  geom_abline(intercept=b/w[2],slope=-w[1]/w[2],linetype=3) +
+  theme(panel.grid.major = element_line(colour = "grey"))
 ```
 
 ## Question 3:
@@ -92,7 +100,7 @@ As mentioned above, the margins of the maximal margin classifer is defined as:
  
 - w^T * x - b = -1 for y = -1
 
-Therefore, the classification rule is:
+Therefore, the classification rule is defined as:
 
 - w^T * x - b >= 1 then y = 1, and
 
@@ -107,6 +115,7 @@ as.matrix(y)[2,]
 t(as.matrix(w))%*%t(x[12,])-b
 as.matrix(y)[12,]
 ```
+
 ## Question 4:
 As mentioned above, if w^T * x - b >= 1 for all the data with y = 1 and w^T * x - b <= -1 for all the data with y = -1, then the distance between the two margins is defined as: 
 
@@ -119,15 +128,24 @@ m <- 2/norm(as.matrix(w))
 m
 ```
 
+
 # Part II: An application
 ## 2.2.1 Data
 ```{r, warning=FALSE}
 # select a random sample of 70% as train
 library(caret)
-cc_data <- readxl::read_xls('CreditCard_Data.xls', col_names = TRUE, skip = 1)
+library(xgboost)
 
-set.seed(1234)
-split <- createDataPartition(cc_data$`default payment next month`, p = 0.7, list = FALSE) # 70% training, 30% test
+#set.seed(1234)
+
+cc_data <- readxl::read_xls('CreditCard_Data.xls', col_names = TRUE, skip = 1) %>% 
+  rename(DEFAULT = `default payment next month`) %>%  # renamed the `default payment next month` column to DEFAULT, so easier to call the response variable later.
+  select(-c("ID")) # remove the ID column, as it is not a feature.
+
+# quick check to see if there is any NA in the data.
+anyNA(cc_data)
+
+split <- createDataPartition(cc_data$DEFAULT, p = 0.7, list = FALSE) # 70% training, 30% test
 
 train_set <- cc_data[split, ]
 test_set <- cc_data[-split, ]
@@ -139,71 +157,155 @@ dim(train_set)
 ### (a) Model Selection
 For classifying credible and non-credible clients based on the dataset given, I have decided to use a Gradient Boosting algorithm with the xgboost package. This is because with a boosting algorithm, it improves the predictability of the tree-based methods by generating a large number of trees using bootstrapped samples and combine predictions of bootstrapped trees to achieve prediction stability. Boosting algorithm grows a tree sequentially and fit 'weak' classifiers to the original but modified data and combining weak classifiers to produce a strong committee. In other words, boosting algorithm learns from previous tree's mistake and improve on it in subsequent tree. I chose Gradient Boosting method over other boosting algorithms such as AdaBoost because Gradient Boosting is more robust and flexible than AdaBoost, as it can be utilised by any differentiable loss function, not just an exponential loss function in the case of AdaBoost.
 
-In addition, we selected the following hyperparameters:
-
-  + eta = 0.1 -> learning rate not too small (so that the model takes a long time to optimise), and not too big (so that the model bounce around and never converges)
-  + max_depth = 3 -> maximum depth of a tree is 3 to avoid overfitting the model to the training set.
-  + min_child_weight = 2 -> minimum number of observations required in each terminal node to be 2.
-  
-Also, the objective parameter of the xgboost is set to "binary:hinge", so it makes predictions of 0 or 1, rather than returning probabilities.
-
-Refer to the R code below for model construction.
+First, we will train a base xgboost model with no hyperparameters tuning, we will set the objective to be "binary:hinge", so it makes predictions of 0 or 1, rather than returning probabilities. Refer to the R code below for base xgboost model.
 ```{r, warning=FALSE}
-library(xgboost)
-predictor <- c("LIMIT_BAL", "SEX", "EDUCATION", "MARRIAGE", "AGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
-               "BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6", "PAY_AMT1", "PAY_AMT2",
-               "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6")
-response <- c("default payment next month")
+training_matrix <- model.matrix(DEFAULT ~.-1, data = train_set) # create training data matrix
+test_matrix <- model.matrix(DEFAULT ~.-1, data = test_set) # create test data matrix
 
-x_train <- train_set[, predictor] %>% as.matrix()
-y_train <- train_set$`default payment next month`
+dtrain <- xgb.DMatrix(data = training_matrix, label = train_set$DEFAULT) # create xgboost DMatrix for training
+dtest <- xgb.DMatrix(data = test_matrix, label = test_set$DEFAULT) # create xgboost DMatrix for testing
 
-### Gradient Boosting Model
-# create params
-params <- list(
-  eta = 0.1, # learning rate
-  max_depth = 3, # tree depth
-  min_child_weight = 2 # minimum number of observations required in each terminal node
-)
+#set.seed(1234)
+params <- list(booster = "gbtree",
+               objective = "binary:hinge")
 
-# train model
-xgb_model <- xgboost(
-  params = params,
-  data = x_train,
-  label = y_train,
-  nrounds = 1000,
-  objective = "binary:hinge",
-  eval_metric = "rmse",
-  verbose = 0
-)
+# base xgboost model with no hyperparameters tuning
+xgb_base <- xgb.train(params = params,
+                      data = dtrain,
+                      nrounds = 1000,
+                      eval_metric = "error",
+                      early_stopping_rounds = 50,
+                      watchlist = list(train = dtrain, test = dtest),
+                      verbose = 0)
+
+# predict using the base model with training data and see confusion matrix.
+pred_train_xgb_base <- predict(xgb_base, dtrain)
+cfm_xgb_base <- confusionMatrix(factor(pred_train_xgb_base), factor(train_set$DEFAULT))
+
+cfm_xgb_base
 ```
+
+We will now perform hyperparameter tuning. We will tune the following hyperparameters:
+
+- max_depth
+
+- eta (learning rate)
+
+- min_child_weight
+
+We will create a arbitrary 500 rows of random hyperparameters, and create 500 xgboost models based on these hyperparameters. We will get the hyperparameters that will achieve the lowest error with test data (dtest), and use these hyperparameters as our final tuned xgboost model for prediction.
+
+```{r}
+# create empty lists
+lowest_error_list = list()
+parameters_list = list()
+
+# create arbitrary 500 rows with random hyperparameters
+for (iter in 1:500){
+  params <- list(booster = "gbtree",
+                 objective = "binary:hinge",
+                 max_depth = sample(3:10, 1),
+                 eta = runif(1, 0.01, 0.3),
+                 min_child_weight = sample(0:10, 1)
+                )
+  
+  parameters <- as.data.frame(params)
+  parameters_list[[iter]] <- parameters
+}
+
+# Create object that contains all randomly created hyperparameters
+parameters_df <- do.call(rbind, parameters_list)
+
+# use randomly created parameters to create 100 xgboost models
+for (row in 1:nrow(parameters_df)){
+  mdcv <- xgb.train(data = dtrain,
+                    booster = "gbtree",
+                    objective = "binary:hinge",
+                    max_depth = parameters_df$max_depth[row],
+                    eta = parameters_df$eta[row],
+                    min_child_weight = parameters_df$min_child_weight[row],
+                    nrounds = 1000,
+                    eval_metric = "error",
+                    early_stopping_rounds = 30,
+                    watchlist = list(train = dtrain, test = dtest),
+                    verbose = 0
+                  )
+  
+  lowest_error <- as.data.frame(1 - min(mdcv$evaluation_log$test_error))
+  lowest_error_list[[row]] <- lowest_error
+}
+
+# Create object that contains all accuracy's
+lowest_error_df <- do.call(rbind, lowest_error_list)
+
+# Bind columns of accuracy values and random hyperparameter values
+randomsearch = cbind(lowest_error_df, parameters_df)
+
+# prepare hyperparameters table
+randomsearch <- as.data.frame(randomsearch) %>% 
+  rename(test_acc = `1 - min(mdcv$evaluation_log$test_error)`) %>% 
+  arrange(-test_acc)
+
+# display the first 6 rows from the hyperparameters table
+head(randomsearch)
+```
+
+Based on the result of the hyperparameters table above, we will use the hyperparameters of the first row to tune our final xgboost model. Refer to the R code below.
+
+```{r}
+# tunning xgboost model based on the best hyperparameters in table above
+params <- list(booster = "gbtree",
+                 objective = "binary:hinge",
+                 max_depth = randomsearch[1,]$max_depth,
+                 eta = randomsearch[1,]$eta,
+                 min_child_weight = randomsearch[1,]$min_child_weight
+                )
+
+xgb_model_tuned <- xgb.train(params = params,
+                             data = dtrain,
+                             nrounds = 1000,
+                             eval_metric = "error",
+                             early_stopping_rounds = 30,
+                             watchlist = list(train = dtrain, test = dtest),
+                             verbose = 0)
+```
+
 
 ### (b) Model Summary - Variable Importance
 ```{r}
 # create importance matrix
-importance_matrix <- xgb.importance(model = xgb_model)
+importance_matrix_xgb <- xgb.importance(model = xgb_model_tuned)
 
-importance_matrix
+importance_matrix_xgb
 
 # variable importance plot
-xgb.plot.importance(importance_matrix, measure = "Gain")
+xgb.plot.importance(importance_matrix_xgb, measure = "Gain")
 ```
 
-The table and plot above displayed the model summary in terms of which features have the higher importance to the model. Based on the importance plot, we determined that feature PAY_0 (the repayment status in September 2005) has the highest importance to the model performance, second by PAY_AMT1 (the amount paid in September 2005). This makes sense as both of these features represent the repayment status and amount paid in the most recent month of the dataset, which often act as a good indicator of whether the customer will default or not in the next month after. Interestingly, features such as Education, Marriage, and Sex have the lowest importance to the model. This makes sense as by simply isolating these features, one cannot decide whether a customer is more or less likely to default, and thus neither can a machine learning model based on decision tree.
+The table and plot above displayed the model summary in terms of which features have the higher importance to the model. Based on the importance plot, we determined the top 2 features are:
+
+- PAY_0 (the repayment status in September 2005)
+
+- PAY_AMT3 (the amount paid in July 2005)
+
+This makes sense as both of these features represent the repayment status and amount paid in most recent month, which often act as a good indicator of whether the customer will default or not in the next month after. Interestingly, features such as Marriage, and Sex have the lowest importance to the model. This makes sense as by simply isolating these features, one cannot decide whether a customer is more or less likely to default, and thus neither can a machine learning model based on decision tree.
 
 ### (c) Model Performance on Training Set
 ```{r}
 # predict using training data
-pred_train_xgb <- predict(xgb_model, x_train)
+pred_train_xgb_tuned <- predict(xgb_model_tuned, dtrain)
 
 # confusion matrix
-confusionMatrix(factor(pred_train_xgb), factor(y_train))
+cfm_xgb_tuned <- confusionMatrix(factor(pred_train_xgb_tuned), factor(train_set$DEFAULT))
 
+cfm_xgb_tuned_table <- cfm_xgb_tuned$table %>% as.matrix()
+
+cfm_xgb_tuned
 ```
 
-Based on the confusion matrix on the training set, we determined that the model has a 0.8306 accuracy with the training data. 15639 out of 21000 (~74.5%) of the training sample are true positive, where the actual and predicted are both 0 (non-default payment); 1803 out of 21000 (~8.59%) of the training sample are true negative, where the actual and predicted are both 1 (default payment); 2869 out of 21000 (13.6%) of the training sample are false positive, where the actual is actually 1 (default payment) but predicted as 0 (non default payment); and lastly 689 out of 21000 (~3.28%) of the training sample are false negative, where the actual is 0 (non default payment) but predicted as 1 (default payment).
+Based on the confusion matrix on the training set, we determined that the final tuned xgboost model has a `r cfm_xgb_tuned$overall['Accuracy']` accuracy with the training data, a slight drop in accuracy compare to that of the base model (`r cfm_xgb_base$overall['Accuracy']`). `r cfm_xgb_tuned_table[1]` out of `r nrow(train_set)` (~`r round(cfm_xgb_tuned_table[1]/nrow(train_set)*100,2)`%) of the training sample are true positive, where the actual and predicted are both 0 (non-default payment); `r cfm_xgb_tuned_table[4]` out of `r nrow(train_set)` (~`r round(cfm_xgb_tuned_table[4]/nrow(train_set)*100,2)`%) of the training sample are true negative, where the actual and predicted are both 1 (default payment); `r cfm_xgb_tuned_table[3]` out of `r nrow(train_set)` (~`r round(cfm_xgb_tuned_table[3]/nrow(train_set)*100,2)`%) of the training sample are false positive, where the actual is actually 1 (default payment) but predicted as 0 (non default payment); and lastly `r cfm_xgb_tuned_table[2]` out of `r nrow(train_set)` (~`r round(cfm_xgb_tuned_table[2]/nrow(train_set)*100,2)`%) of the training sample are false negative, where the actual is 0 (non default payment) but predicted as 1 (default payment).
 
-Furthermore, the sensitivity of the model is 0.9578, meaning that the model predicted the positive class (0) correctly ~95.36% of time, while the specificity of the model of 0.3859 indicating that the model may not be performing well when predicting the negative class (1).
+Furthermore, the sensitivity of the model is `r cfm_xgb_tuned$byClass['Sensitivity']`, meaning that the model predicted the positive class (0) correctly ~`r round(cfm_xgb_tuned$byClass['Sensitivity']*100,2)`% of time, while the specificity of the model of `r cfm_xgb_tuned$byClass['Specificity']` indicating that the model may not be performing well when predicting the negative class (1).
 
 
 ## 2.2.3 Support vector classifier
@@ -218,37 +320,64 @@ There are 3 types of Support Vector Machines:
 
 In a real world dataset, it is very unlikely that a linear decision with hard boundary can be drawn between two groups of samples, and an amount of misclassification should be allowed. And thus, this ruled out implementing the Maximal margin classifier for the classification problem of credible and non-credible clients. Between the remaining two types of Support Vector Machines, I have selected the Support vector machine (non-linear decision boundary) for this problem. This is because being able to utilise the transformation kernels and enlarge the feature space allows for a better fit to the data points in classification problem, and hence should produce a more accurate model. While the soft margins with the Support vector classifiers allow a level of misclassification, in a two-class setting, the boundary between the two classes is linear for Support vector classifiers, and thus by using Support vector machine, we can capture the non-linearity of data in practice.
 
+We will also perform a 5 folds cross validation with 6 default values (sigma and C), which is denoted by the tuneLength parameter in the "train" method. 
+
 Refer to the R code below.
 
-```{r}
+```{r, warning=FALSE}
 # setting up parallel processing, as the svm model takes a long time to train, when tuneLength > 1.
 library(parallel)
 library(doParallel)
 
+#set.seed(1234)
+
 cluster <- makeCluster(detectCores() - 1) # leave 1 core for OS.
 registerDoParallel(cluster)
+
+predictor <- c("LIMIT_BAL", "SEX", "EDUCATION", "MARRIAGE", "AGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
+               "BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6", "PAY_AMT1", "PAY_AMT2",
+               "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6")
+
+df_train <- train_set %>% 
+  mutate(DEFAULT = as.factor(DEFAULT))
+
+x_train <- train_set[, predictor] %>% as.matrix()
 
 # set up cross validation
 train_control <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
 
-svm_model <- train(x = train_set[, predictor],
-                   y = factor(train_set$`default payment next month`),
+svm_model <- train(DEFAULT ~.,
+                   data = df_train,
                    method = "svmRadial",
                    trControl = train_control,
                    preProcess = c("center", "scale"),
-                   tuneLength = 6)
+                   tuneLength = 6) # 6 values of the cost function
 
 stopCluster(cluster)
 
 svm_model
 ```
-```{r}
+
+```{r, include=FALSE}
 # save svm model, so don't need to wait for the run everytime.
-saveRDS(svm_model, "svm_model.rds")
-svm_model <- readRDS("svm_model.rds")
+# saveRDS(svm_model, "svm_model.rds")
+# svm_model <- readRDS("svm_model.rds")
 ```
 
+
 ### (b) Model Summary - Variable Importance
+```{r}
+# create variable importance dataframe using the filterVarImp method in caret package.
+# filterVarImp is used to calculate filter-based variable importance. This is used because SVM models do not
+# have the corresponding varImp method in the caret package.
+# This method is the last resort, as I cannot find a way to compute variable importance from a svm model trained using caret.
+df_importance_svm <- filterVarImp(train_set[, predictor], factor(train_set$DEFAULT)) %>% 
+  arrange(desc(X0))
+
+df_importance_svm
+```
+
+The table above displayed the variable importance. Based on the result, we determined that feature PAY_0 (the repayment status in September 2005) has the highest importance to the model performance. This makes sense as this feature represent the repayment status in the most recent month of the dataset, which often act as a good indicator of whether the customer will default or not in the next month after.
 
 
 ### (c) Model Performance on Training Set
@@ -257,13 +386,16 @@ svm_model <- readRDS("svm_model.rds")
 pred_train_svm <- predict(svm_model, x_train)
 
 # confusion matrix
-confusionMatrix(factor(pred_train_svm), factor(y_train))
+cfm_svm_train <- confusionMatrix(factor(pred_train_svm), factor(train_set$DEFAULT))
 
+cfm_svm_train_table <- cfm_svm_train$table %>% as.matrix()
+
+cfm_svm_train
 ```
 
-Based on the confusion matrix on the training set, we determined that the model has a 0.8307 accuracy with the training data, near identical to the gradient boosting model above. 15667 out of 21000 (~74.6%) of the training sample are true positive, where the actual and predicted are both 0 (non-default payment); 1778 out of 21000 (~8.47%) of the training sample are true negative, where the actual and predicted are both 1 (default payment); 2894 out of 21000 (13.8%) of the training sample are false positive, where the actual is actually 1 (default payment) but predicted as 0 (non default payment); and lastly 661 out of 21000 (~3.15%) of the training sample are false negative, where the actual is 0 (non default payment) but predicted as 1 (default payment).
+Based on the confusion matrix on the training set, we determined that the model has a `r cfm_svm_train$overall['Accuracy']` accuracy with the training data, which is slightly better than the gradient boosting model above. `r cfm_svm_train_table[1]` out of `r nrow(train_set)` (~`r round(cfm_svm_train_table[1]/nrow(train_set)*100,2)`%) of the training sample are true positive, where the actual and predicted are both 0 (non-default payment); `r cfm_svm_train_table[4]` out of `r nrow(train_set)` (~`r round(cfm_svm_train_table[4]/nrow(train_set)*100,2)`%) of the training sample are true negative, where the actual and predicted are both 1 (default payment); `r cfm_svm_train_table[3]` out of `r nrow(train_set)` (~`r round(cfm_svm_train_table[3]/nrow(train_set)*100,2)`%) of the training sample are false positive, where the actual is actually 1 (default payment) but predicted as 0 (non default payment); and lastly `r cfm_svm_train_table[2]` out of `r nrow(train_set)` (~`r round(cfm_svm_train_table[2]/nrow(train_set)*100,2)`%) of the training sample are false negative, where the actual is 0 (non default payment) but predicted as 1 (default payment).
 
-Furthermore, the sensitivity of the model is 0.9595, meaning that the model predicted the positive class (0) correctly ~95.95% of time, while the specificity of the model of 0.3806 indicating that the model may not be performing well when predicting the negative class (1), slightly worse than the gradient boosting model.
+Furthermore, the sensitivity of the model is `r cfm_svm_train$byClass['Sensitivity']`, meaning that the model predicted the positive class (0) correctly ~`r round(cfm_svm_train$byClass['Sensitivity']*100,2)`% of time, while the specificity of the model of `r cfm_svm_train$byClass['Specificity']` indicating that the model may not be performing well when predicting the negative class (1), slightly worse than the gradient boosting model.
 
 
 ## 2.2.4 Prediction
@@ -271,15 +403,43 @@ We will now apply the gradient boosting model and the support vector machine mod
 
 ```{r}
 # Predict on test data using xgboost model
-x_test <- test_set[, predictor] %>% as.matrix()
-y_test <- test_set$`default payment next month`
+pred_test_xgb <- predict(xgb_model_tuned, dtest)
+cfm_xgb_test <- confusionMatrix(factor(pred_test_xgb), factor(test_set$DEFAULT))
 
-pred_test_xgb <- predict(xgb_model, x_test)
-confusionMatrix(factor(pred_test_xgb), factor(y_test))
+cfm_xgb_test_table <- cfm_xgb_test$table %>% as.matrix()
+
+cfm_xgb_test
 ```
+
 ```{r}
 # Predict on test data using svm model
+x_test <- test_set[, predictor] %>% as.matrix()
+
 pred_test_svm <- predict(svm_model, x_test)
-confusionMatrix(factor(pred_test_svm), factor(y_test))
+cfm_svm_test <- confusionMatrix(factor(pred_test_svm), factor(test_set$DEFAULT))
+
+cfm_svm_test_table <- cfm_svm_test$table %>% as.matrix()
+
+cfm_svm_test
 ```
 
+### Model Performance
+The gradient boosting model has an accuracy of `r cfm_xgb_test$overall['Accuracy']` with the test data, which is a drop in accuracy compare to that with the training data. Based on the confusion matrix of the gradient boosting model on the test set, we determined that the model predicted `r cfm_xgb_test_table[1]` out of `r nrow(test_set)` (~`r round(cfm_xgb_test_table[1]/nrow(test_set)*100,2)`%) of the test samples are true positive; `r cfm_xgb_test_table[4]` out of `r nrow(test_set)` (~`r round(cfm_xgb_test_table[4]/nrow(test_set)*100,2)`%) of the test samples are true negative; `r cfm_xgb_test_table[3]` out of `r nrow(test_set)` (~`r round(cfm_xgb_test_table[3]/nrow(test_set)*100,2)`%) of the test samples are false positive; and `r cfm_xgb_test_table[2]` out of `r nrow(test_set)` (~`r round(cfm_xgb_test_table[2]/nrow(test_set)*100,2)`%) of the test samples are false negative. In addition, the sensitivity of the model is `r cfm_xgb_test$byClass['Sensitivity']`, meaning that the model predicted the positive class (0) correctly ~`r round(cfm_xgb_test$byClass['Sensitivity']*100,2)`% of time, while the specificity of `r cfm_xgb_test$byClass['Specificity']` indicating that the model does not perform well when predicting the negative class (1), which is slightly worse than that of the training sample.
+
+With regards to the support vector machine model, it has an accuracy of `r cfm_svm_test$overall['Accuracy']` with the test data, which is a drop in accuracy compare to that with the training data. Based on the confusion matrix of the support vector machine model on the test set, we determined that the model predicted `r cfm_svm_test_table[1]` out of `r nrow(test_set)` (~`r round(cfm_svm_test_table[1]/nrow(test_set)*100,2)`%) of the test samples are true positive, which is roughly the same level of accuracy with the gradient boosting model; `r cfm_svm_test_table[4]` out of `r nrow(test_set)` (~`r round(cfm_svm_test_table[4]/nrow(test_set)*100,2)`%) of the test samples are true negative; `r cfm_svm_test_table[3]` out of `r nrow(test_set)` (~`r round(cfm_svm_test_table[3]/nrow(test_set)*100,2)`%) of the test samples are false positive; and `r cfm_svm_test_table[2]` out of `r nrow(test_set)` (~`r round(cfm_svm_test_table[2]/nrow(test_set)*100,2)`%) of the test samples are false negative. In addition, the sensitivity of the model is `r cfm_svm_test$byClass['Sensitivity']`, meaning that the model predicted the positive class (0) correctly `r round(cfm_svm_test$byClass['Sensitivity']*100,2)`% of time, while the specificity of `r cfm_svm_test$byClass['Specificity']` indicating that the model does not perform well when predicting the negative class (1).
+
+### Model Comparison
+In the context of credit card payment defaults, we would want a machine learning model to predict the negative class (1) just as accurate as the positive class (0), if not more. This is because from the business context, the user cares more about clients that are likely to default on credit card payment rather than not default.
+
+With the support vector machine model, it has a false positive rate of `r round(cfm_svm_test_table[3]/nrow(test_set)*100,2)`%, or `r cfm_svm_test_table[3]` out of `r nrow(test_set)` test samples were predicted to be false positive. In comparison, the gradient boosting model has a false positive rate of `r round(cfm_xgb_test_table[3]/nrow(test_set)*100,2)`%, or `r cfm_xgb_test_table[3]` out of `r nrow(test_set)` test samples were predicted to be false positive, which is slightly better than the support vector machine model. False positive in this business context means that the actual observation is actually default, but the models predicted them to be not default, and thus the higher the false positive rate, the less reliable the model is in predicting clients who are likely to default on credit card payments, which is problematic in this business context. Therefore, the gradient boosting model is preferable over the support vector machine model based on having lower false positive rate.
+
+Furthermore, the gradient boosting model has a higher accuracy with the test samples than the support vector machine model, and has higher specificity than the support vector machine model, which means that the gradient boosting model predicts slightly better on the negative class.
+
+### Future Improvements
+Based on the analysis above, we concluded that the gradient boosting model performs slightly better than the support vector machine model. An immediate improvement opportunity I can think of is to improve the specificity of the model, such that the model can improve on its prediction on the negative class, which in this case is corresponding to credit card payment default. This can be achieved by further tuning of the hyperparameters and reduce model errors. 
+
+Furthermore, some of the features might be correlated, so potentially performing PCA to reduce the dimensionality of the data can improve the computation of both the gradient boosting and support vector machine models. This will then allow us to:
+
+- Create more iterations of hyperparameters to tune the gradient boosting model.
+
+- Increase the folds of cross-validation and values of the cost function for the support vector machine model.

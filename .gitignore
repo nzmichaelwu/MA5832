@@ -44,4 +44,5 @@ vignettes/*.pdf
 *.css
 *.html
 *.xls
-*.xlxs
+*.xlsx
+*.rds
